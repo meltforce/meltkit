@@ -1,0 +1,24 @@
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config and secrets
+.env
+
+# Claude Code
+.claude/settings.local.json
+.claude/skills/
+.claude/agents/
+
+# Internal docs
+plan.md
+internal_docs/
