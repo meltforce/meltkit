@@ -24,7 +24,7 @@ func TestHealthz(t *testing.T) {
 func TestRouterAccess(t *testing.T) {
 	s := New()
 	s.Router().Get("/custom", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("custom"))
+		_, _ = w.Write([]byte("custom"))
 	})
 
 	rec := httptest.NewRecorder()

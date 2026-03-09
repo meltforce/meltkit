@@ -154,7 +154,7 @@ func TestTailscaleIdentity(t *testing.T) {
 func TestRequestLogging(t *testing.T) {
 	handler := RequestLogging(slog.Default())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("hello"))
+		_, _ = w.Write([]byte("hello"))
 	}))
 
 	rec := httptest.NewRecorder()
