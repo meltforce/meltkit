@@ -1,5 +1,7 @@
 # meltkit
 
+[![CI](https://github.com/meltforce/meltkit/actions/workflows/ci.yml/badge.svg)](https://github.com/meltforce/meltkit/actions/workflows/ci.yml)
+
 Shared Go infrastructure library for [meltforce](https://github.com/meltforce) services. Each service focuses on business logic — meltkit handles the boilerplate.
 
 ## Packages
