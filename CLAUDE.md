@@ -62,6 +62,17 @@ pkg/secrets/      # setec integration (optional), secret resolution chain
 - **Interface-based**: Middleware uses interfaces (`whoisClient`, `userStore`) for testability.
 - **Embed and extend**: Apps embed meltkit config structs into their own config, adding app-specific fields.
 
+## Git Push
+
+The SSH deploy key is read-only. To push, switch the remote to HTTPS with the GitHub PAT from setec:
+
+```bash
+# Get PAT and set remote
+TOKEN=$(SETEC_SERVER=https://setec.leo-royal.ts.net setec get homelab/github-pat)
+git remote set-url origin "https://${TOKEN}@github.com/meltforce/meltkit.git"
+git push
+```
+
 ## Key Commands
 
 ```bash
@@ -83,25 +94,13 @@ go test -race ./...
 - `tailscale/setec` — secret management
 - `yaml.v3` — config parsing
 
-## Source Projects (for extraction reference)
+## CI
 
-Code to extract from totalrecall:
+GitHub Actions runs on push to `main` and on PRs: build, vet, test (`-race`), golangci-lint, govulncheck.
 
-| meltkit package | totalrecall source (absolute path) |
-|---|---|
-| pkg/config | `/Users/linus/projects/totalrecall/internal/config/config.go` |
-| pkg/db | `/Users/linus/projects/totalrecall/internal/storage/db.go` |
-| pkg/server | `/Users/linus/projects/totalrecall/internal/server/server.go` |
-| pkg/middleware | `/Users/linus/projects/totalrecall/internal/server/middleware.go` |
-| pkg/mcp | `/Users/linus/projects/totalrecall/internal/mcp/server.go` |
-| pkg/secrets | `/Users/linus/projects/totalrecall/internal/config/config.go` (setec parts) |
+govulncheck is `continue-on-error` due to a Go 1.25 / x/tools compatibility panic. Remove the flag once upstream fixes it.
 
 ## Related Projects
 
-- **totalrecall** (`../totalrecall/`) — Primary extraction source. Will be refactored to import meltkit.
+- **totalrecall** (`../totalrecall/`) — Original extraction source. To be refactored to import meltkit.
 - **vimmary** (`../vimmary/`) — First new consumer. See `../vimmary/CONCEPT.md`.
-- **FreeReps** (`../FreeReps/`) — Pattern validation. May adopt meltkit later.
-
-## Status
-
-Pre-implementation. Extraction plan defined, source code analyzed.
