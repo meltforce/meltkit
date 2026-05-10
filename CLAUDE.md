@@ -64,12 +64,11 @@ pkg/secrets/      # setec integration (optional), secret resolution chain
 
 ## Git Push
 
-The SSH deploy key is read-only. To push, switch the remote to HTTPS with the GitHub PAT from setec:
+Source of truth is the in-house Forgejo (`git.coydog-fence.ts.net/meltforce.net/meltkit`, tailnet-only). Codeberg (`codeberg.org/meltforce/meltkit`) is a public push-mirror.
 
 ```bash
-# Get PAT and set remote
-TOKEN=$(SETEC_SERVER=https://setec.leo-royal.ts.net setec get homelab/github-pat)
-git remote set-url origin "https://${TOKEN}@github.com/meltforce/meltkit.git"
+# Forgejo push uses the credential helper (setec-backed)
+git remote set-url origin https://git.coydog-fence.ts.net/meltforce.net/meltkit.git
 git push
 ```
 
@@ -96,7 +95,7 @@ go test -race ./...
 
 ## CI
 
-GitHub Actions runs on push to `main` and on PRs: build, vet, test (`-race`), golangci-lint, govulncheck.
+Forgejo Actions runs on push to `main` and on PRs (`.forgejo/workflows/ci.yml`): build, vet, test (`-race`), golangci-lint, govulncheck. Runs on the `bob-01` runner using the `docker` label.
 
 govulncheck is `continue-on-error` due to a Go 1.25 / x/tools compatibility panic. Remove the flag once upstream fixes it.
 

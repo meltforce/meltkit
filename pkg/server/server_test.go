@@ -6,7 +6,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/meltforce/meltkit/pkg/middleware"
+	"codeberg.org/meltforce/meltkit/pkg/middleware"
 )
 
 func TestHealthz(t *testing.T) {

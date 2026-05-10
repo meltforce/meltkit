@@ -1,4 +1,4 @@
-module github.com/meltforce/meltkit
+module codeberg.org/meltforce/meltkit
 
 go 1.25.5
 

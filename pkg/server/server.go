@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/meltforce/meltkit/pkg/middleware"
+	"codeberg.org/meltforce/meltkit/pkg/middleware"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
