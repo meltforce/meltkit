@@ -1,6 +1,6 @@
 # meltkit
 
-Shared Go infrastructure library for [meltforce](https://codeberg.org/meltforce) services. Each service focuses on business logic — meltkit handles the boilerplate.
+Shared Go infrastructure library for [meltforce](https://github.com/meltforce) services. Each service focuses on business logic — meltkit handles the boilerplate.
 
 ## Packages
 
@@ -17,9 +17,9 @@ Shared Go infrastructure library for [meltforce](https://codeberg.org/meltforce)
 
 ```go
 import (
-    "codeberg.org/meltforce/meltkit/pkg/config"
-    "codeberg.org/meltforce/meltkit/pkg/db"
-    "codeberg.org/meltforce/meltkit/pkg/server"
+    "github.com/meltforce/meltkit/pkg/config"
+    "github.com/meltforce/meltkit/pkg/db"
+    "github.com/meltforce/meltkit/pkg/server"
 )
 
 // Define your app config by embedding meltkit structs

@@ -8,7 +8,7 @@ Gemeinsame Go-Infrastruktur aus totalrecall extrahieren und als eigenständiges,
 
 ### Phase 1: Modul aufsetzen
 
-1. Go-Modul initialisieren: `codeberg.org/meltforce/meltkit`
+1. Go-Modul initialisieren: `github.com/meltforce/meltkit`
 2. Package-Struktur anlegen (siehe CLAUDE.md)
 3. Go dependencies einrichten
 
@@ -57,7 +57,7 @@ Reihenfolge nach Abhängigkeiten (unabhängige Packages zuerst):
 
 ### Phase 4: totalrecall umstellen
 
-1. `go get codeberg.org/meltforce/meltkit`
+1. `go get github.com/meltforce/meltkit`
 2. Interne Packages durch meltkit-Imports ersetzen
 3. App-spezifischen Code in totalrecall belassen
 4. Tests laufen lassen, deployen, verifizieren

@@ -64,7 +64,7 @@ pkg/secrets/      # setec integration (optional), secret resolution chain
 
 ## Git Push
 
-Source of truth is the in-house Forgejo (`git.coydog-fence.ts.net/meltforce.net/meltkit`, tailnet-only). Codeberg (`codeberg.org/meltforce/meltkit`) is a public push-mirror.
+Source of truth is the in-house Forgejo (`git.coydog-fence.ts.net/meltforce.net/meltkit`, tailnet-only). GitHub (`github.com/meltforce/meltkit`) is a public push-mirror.
 
 ```bash
 # Forgejo push uses the credential helper (setec-backed)
