@@ -1,0 +1,39 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Headless Renovate (no PR workflow; preset: homelab/default.json). It watches go.mod and the workflow's actions. A new version lands on main as a commit and the CI builds, vets, tests and lints it; nutrak and vimmary receive it when they raise their meltkit requirement.",
+  "extends": [
+    "local>meltforce.net/homelab"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "packageRules": [
+    {
+      "description": "A release is three days old before it is taken, so a broken release is usually withdrawn or fixed before it reaches main. The CI tests the commit after it landed; the undo is a revert of the commit.",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "go.mod and go.sum are shared by every module update; one branch for all non-major updates writes them once instead of producing branches that conflict with each other. The go directive is excluded by the preset's own rule and moves alone.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "go modules non-major",
+      "matchDepTypes": [
+        "require",
+        "indirect"
+      ]
+    }
+  ]
+}
