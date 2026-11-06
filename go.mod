@@ -10,7 +10,7 @@ require (
 	github.com/pgvector/pgvector-go/pgx v0.4.1
 	github.com/tailscale/setec v0.0.0-20261002143449-bc168fdb2362
 	gopkg.in/yaml.v3 v3.0.1
-	tailscale.com v1.104.4
+	tailscale.com v1.104.5
 )
 
 require (
