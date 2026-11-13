@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ type Server struct {
 	router chi.Router
 	whois  middleware.WhoisClient
 	users  middleware.UserStore
+	sha    string
 }
 
 // Option configures server creation.
@@ -30,7 +32,16 @@ func WithLogger(log *slog.Logger) Option {
 	}
 }
 
+// WithBuildSHA sets the commit SHA that /healthz reports. Pass the value of
+// the BUILD_SHA build argument; an empty value reports "dev".
+func WithBuildSHA(sha string) Option {
+	return func(s *Server) {
+		s.sha = sha
+	}
+}
+
 // New creates a new Server with RequestLogging, CORS, and /healthz.
+// /healthz answers 200 with {"status":"ok","sha":"<build SHA>"}.
 func New(opts ...Option) *Server {
 	s := &Server{
 		log:    slog.Default(),
@@ -43,9 +54,17 @@ func New(opts ...Option) *Server {
 	s.router.Use(middleware.RequestLogging(s.log))
 	s.router.Use(middleware.CORS)
 
+	if s.sha == "" {
+		s.sha = "dev"
+	}
+	health, _ := json.Marshal(struct {
+		Status string `json:"status"`
+		SHA    string `json:"sha"`
+	}{"ok", s.sha})
 	s.router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(health)
 	})
 
 	return s

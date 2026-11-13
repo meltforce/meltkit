@@ -34,6 +34,7 @@ pkg/auth/         # sessions, local passwords, OIDC login, access tokens, auth t
 ### pkg/server
 - `Server` struct with `chi.Router`
 - `New(...Option)` factory
+- `/healthz` answers `{"status":"ok","sha":"<sha>"}`; `WithBuildSHA(sha)` sets the SHA, unset reports `dev` (homelab `STANDARDS.md` § Image registry & tagging)
 - `SetTailscale(lc)` — configure Tailscale local client for auth
 - `SetMCP(mcpSrv, injector)` — mount MCP at `/mcp` behind `IdentityMiddleware`, with user ID context injection
 - `SetMCPWithAuth(mcpSrv, injector, mw)` — same, behind the given middleware (e.g. `auth.Middleware(auth.WithScope(auth.ScopeMCP))`)

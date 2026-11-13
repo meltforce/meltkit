@@ -13,14 +13,30 @@ import (
 )
 
 func TestHealthz(t *testing.T) {
-	s := New()
-	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if rec.Body.String() != "ok" {
-		t.Errorf("body = %q, want %q", rec.Body.String(), "ok")
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	for _, tc := range []struct {
+		name string
+		opts []Option
+		want string
+	}{
+		{"unset reports dev", nil, `{"status":"ok","sha":"dev"}`},
+		{"empty reports dev", []Option{WithBuildSHA("")}, `{"status":"ok","sha":"dev"}`},
+		{"build SHA", []Option{WithBuildSHA(sha)}, `{"status":"ok","sha":"` + sha + `"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(tc.opts...)
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+			if rec.Code != http.StatusOK {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+			if rec.Body.String() != tc.want {
+				t.Errorf("body = %q, want %q", rec.Body.String(), tc.want)
+			}
+		})
 	}
 }
 
