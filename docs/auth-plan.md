@@ -45,6 +45,9 @@ tsidp is one OIDC provider among others and needs no code of its own.
   others (see *Tailnet switch, considered*), but every caller that relies on
   `WhoIs` today is a machine client covered by a token, and tailnet users get a
   password-free login through tsidp.
+- **vimmary is reached at `vimmary.meltrocker.net` through the ingress on
+  smokey; outbound requests carry smokey's tailnet identity** (operator
+  decision 2026-11-13; the Aperture grant is extended to smokey).
 
 ## `pkg/auth`
 
@@ -106,6 +109,8 @@ so they do not interleave with the app's numbering.
 | `auth_sessions` | SHA-256 of the cookie token, user ID, expiry, last use, client IP, user agent |
 | `auth_identities` | `(issuer, subject)` → user ID |
 | `auth_passwords` | username, argon2id hash, user ID, failed-attempt counter |
+| `auth_oidc_links` | SHA-256 of the link flow's `state`, user ID, expiry (10 min, single use) |
+| `auth_tokens` | SHA-256 of the personal access token, user ID, name, scopes, expiry, last use |
 | `oauth_clients` | CIMD URL, fetched metadata, cache expiry |
 | `oauth_codes` | authorization code hash, client, redirect URI, PKCE challenge, resource, user, expiry |
 | `oauth_tokens` | access and refresh token hashes, client, user, resource, scope, expiry, revocation |
@@ -184,13 +189,23 @@ Spec: MCP authorization, revision 2026-07-28.
 
 ### Personal access tokens
 
-- Created by a user in the app, shown once, stored hashed, with a name, an
-  optional expiry and a scope (`mcp`, `api`); revocable.
+- Created by a user in the app (`CreateToken`), shown once, stored as SHA-256 of
+  32 random bytes, with a name, an optional expiry and scopes `mcp`, `api`;
+  listed and revoked through `ListTokens`, `RevokeToken`; deleted by
+  `DeleteUser`.
 - Accepted as `Authorization: Bearer` on `/mcp` and the REST API, mapped to the
   user who created it. Issued by the app for the app, so the spec's audience
   rule holds.
-- Format `<app>_pat_<random>`, so a leaked token is recognisable in logs and
-  secret scanners.
+- Format `<prefix>_pat_<random>`, prefix from `auth.token_prefix` or
+  `WithTokenPrefix`, so a leaked token is recognisable in logs and secret
+  scanners.
+- A bearer request needs no `Origin`, because a browser does not attach the
+  header on its own. An invalid, expired or revoked token answers 401 with
+  `WWW-Authenticate: Bearer error="invalid_token"` and does not reach the
+  fallback; a token without the scope that `WithScope` requires answers 403.
+- A session satisfies `api` and not `mcp`. `/mcp` therefore accepts only
+  tokens: the browser UI does not call it, and an MCP grant stays an explicit
+  act of the user (a token now, OAuth consent from v0.5.0).
 
 ### Tailnet switch, considered
 
@@ -210,8 +225,9 @@ with a tag as `src` is not shown in Tailscale's examples and has to be tested.
 
 ### Changes elsewhere in meltkit
 
-- `pkg/server.SetMCP` takes the auth middleware instead of
-  `IdentityMiddleware`; the well-known paths are mounted beside `/mcp`.
+- `pkg/server.SetMCPWithAuth` mounts `/mcp` behind a given middleware;
+  `SetMCP` keeps `IdentityMiddleware`. From v0.5.0 the well-known paths are
+  mounted beside `/mcp`.
 - Removed after every consumer has migrated: `middleware.TailscaleIdentity`,
   `middleware.DevIdentity`, `server.SetTailscale`,
   `server.IdentityMiddleware`, `config.TailscaleConfig`. Local development uses
@@ -222,12 +238,13 @@ with a tag as `src` is not shown in Tailscale's examples and has to be tested.
 | Version | Content | Breaking |
 |---|---|---|
 | v0.3.0 | sessions, passwords, OIDC client, middleware, migrations | no |
-| v0.4.0 | OAuth authorization and resource server for MCP; personal access tokens; `SetMCP` with auth | `SetMCP` signature |
-| v0.5.0 | Tailscale identity, `SetTailscale`, `TailscaleConfig` removed | yes |
+| v0.4.0 | personal access tokens; bearer and scopes in `Middleware`; `SetMCPWithAuth` | no |
+| v0.5.0 | OAuth authorization and resource server for MCP | no |
+| v0.6.0 | Tailscale identity, `SetTailscale`, `TailscaleConfig` removed | yes |
 
 Tests: `httptest` against an in-process OIDC provider and full OAuth flows
 (PKCE mismatch, wrong resource, replayed code, rotated refresh token, CIMD
-redirect mismatch, SSRF targets). A security review runs before v0.4.0.
+redirect mismatch, SSRF targets). A security review runs before v0.5.0.
 
 ## vimmary
 
@@ -248,15 +265,16 @@ redirect mismatch, SSRF targets). A security review runs before v0.4.0.
 5. Middleware order: session first, `WhoIs` as fallback. `link_by_email` on for
    tsidp.
 
-### R2 — MCP OAuth and tokens (meltkit v0.4.0)
+### R2 — tokens (meltkit v0.4.0), MCP OAuth (meltkit v0.5.0)
 
-1. `/mcp` requires a bearer token (OAuth or personal access token); stdio mode
-   keeps user 1.
-2. Consent page, connected clients and personal access tokens in Settings.
+1. `/mcp` requires a bearer token (personal access token, OAuth from v0.5.0);
+   stdio mode keeps user 1.
+2. Personal access tokens in Settings; consent page and connected clients with
+   v0.5.0.
 3. Before `WhoIs` stops being accepted for `/mcp`, every machine client carries
    a token (see *Homelab*).
 
-### R3 — tsnet removed (meltkit v0.5.0)
+### R3 — tsnet removed (meltkit v0.6.0)
 
 1. `startTailscale`, the tsnet branch of `openListener`, `tsnetHTTPClient` and
    the loopback health listener are removed; `/healthz` is served on the main
@@ -283,8 +301,7 @@ Machine clients that reach vimmary through `WhoIs` today, found in
 tsmcp keeps its Keycloak login for claude.ai; vimmary sees only the token, so
 every member of group `mcp` still reads the primary user's data, as today.
 
-- **Reachability of the instance**: tailnet only (reverse proxy on the tailnet)
-  or public. With tsmcp in front, claude.ai needs no public vimmary.
+- **Reachability of the instance**: decided, see *Decisions*.
 - **tsidp client**: created with the `tsidp-client` skill; the secret goes to
   setec.
 - tsidp is tailnet-only: the browser that logs in and the vimmary host both need
@@ -292,7 +309,7 @@ every member of group `mcp` still reads the primary user's data, as today.
 
 ## labtrak and nutrak
 
-They adopt v0.5.0 after vimmary R3, each with its own plan for mapping
+They adopt v0.6.0 after vimmary R3, each with its own plan for mapping
 `Identity` onto its `Principal`.
 
 ## Open questions

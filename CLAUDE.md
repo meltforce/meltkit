@@ -13,7 +13,7 @@ pkg/server/       # chi router, SPA frontend serving, HTTP lifecycle
 pkg/middleware/    # Tailscale identity, dev identity, request logging, CORS
 pkg/mcp/          # MCP server factory, user ID context injection
 pkg/secrets/      # setec integration (optional), secret resolution chain
-pkg/auth/         # sessions, local passwords, OIDC login, auth tables (optional)
+pkg/auth/         # sessions, local passwords, OIDC login, access tokens, auth tables (optional)
 ```
 
 ## Package Details
@@ -35,7 +35,8 @@ pkg/auth/         # sessions, local passwords, OIDC login, auth tables (optional
 - `Server` struct with `chi.Router`
 - `New(...Option)` factory
 - `SetTailscale(lc)` — configure Tailscale local client for auth
-- `SetMCP(mcpSrv)` — mount MCP at `/mcp` with user ID context injection
+- `SetMCP(mcpSrv, injector)` — mount MCP at `/mcp` behind `IdentityMiddleware`, with user ID context injection
+- `SetMCPWithAuth(mcpSrv, injector, mw)` — same, behind the given middleware (e.g. `auth.Middleware(auth.WithScope(auth.ScopeMCP))`)
 - `SetFrontend(fs.FS)` — serve embedded SPA with cache control
 - `ServeHTTP(w, r)` — implements `http.Handler`
 
@@ -58,12 +59,13 @@ pkg/auth/         # sessions, local passwords, OIDC login, auth tables (optional
 
 ### pkg/auth
 - Plan and later stages: `docs/auth-plan.md`
-- `Config` — the app's `auth:` block (`base_url`, `methods`, `session_ttl`, `trusted_proxies`, `initial_admin`, `oidc`)
-- `New(cfg, store, resolver, ...Option)` — no network I/O; the OIDC provider is discovered on first use
+- `Config` — the app's `auth:` block (`base_url`, `methods`, `session_ttl`, `trusted_proxies`, `initial_admin`, `token_prefix`, `oidc`)
+- `New(cfg, store, resolver, ...Option)` — no network I/O; the OIDC provider is discovered on first use. `WithTokenPrefix` overrides `token_prefix` (default `meltkit`)
 - `Handler()` — `/auth/methods`, `/auth/login`, `/auth/oidc/start`, `/auth/oidc/callback`, `/auth/logout`, `/auth/me`; mount at `/auth/*` without stripping the prefix
-- `Middleware(WithFallback(mw))` — session cookie → `middleware.UserIDFromContext`; Origin check on state-changing requests; 401 or fallback without a session
+- `Middleware(WithFallback(mw), WithScope(s))` — `Authorization: Bearer <pat>` or session cookie → `middleware.UserIDFromContext`. Bearer: no Origin check; invalid token 401 without fallback; missing scope 403. Cookie: Origin check on state-changing requests; satisfies `ScopeAPI`, not `ScopeMCP`. No credentials: 401 or fallback
+- `CreateToken(ctx, userID, name, scopes, expiresAt)` returns the secret `<prefix>_pat_<random>` once; `ListTokens`, `RevokeToken`, `TokenFromContext`. Tokens need a Store that implements `TokenStore` (`PgxStore` does), otherwise `ErrTokensUnsupported`
 - `UserResolver` (app) maps an `Identity` to an app user; `LoginLookup` is required for `oidc.link_by_email`
-- `ListSessions`, `RevokeSession`, `RevokeUserSessions`, `CreatePasswordUser`, `SetPassword`, `ChangePassword` (shares the username login limit, `ErrRateLimited`), `DeleteUser`, `IsInitialAdmin`
+- `ListSessions`, `RevokeSession`, `RevokeUserSessions`, `CreatePasswordUser`, `SetPassword`, `ChangePassword` (shares the username login limit, `ErrRateLimited`), `DeleteUser` (also removes tokens), `IsInitialAdmin`
 - `StartOIDCLink(w, r, userID, next)` — called from an authenticated app route; links the provider identity to that user. The pending link is stored server-side under the state's hash (`auth_oidc_links`, 10 min, single use). `ListIdentities`, `UnlinkIdentity`
 - `NewPgxStore(pool)` implements `Store`; `RunMigrations(dsn)` records versions in `auth_schema_migrations`
 
