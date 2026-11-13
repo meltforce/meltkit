@@ -42,6 +42,14 @@ func UserIDFromContext(r *http.Request) (int, bool) {
 	return id, ok
 }
 
+// WithUser returns a copy of ctx carrying the user ID and info that
+// UserIDFromContext and UserInfoFromContext read. Authentication middleware
+// outside this package (pkg/auth) sets the identity through it.
+func WithUser(ctx context.Context, userID int, info UserInfo) context.Context {
+	ctx = context.WithValue(ctx, userIDKey, userID)
+	return context.WithValue(ctx, userInfoKey, info)
+}
+
 // UserInfoFromContext returns the authenticated user info from the request context.
 func UserInfoFromContext(r *http.Request) UserInfo {
 	if info, ok := r.Context().Value(userInfoKey).(UserInfo); ok {

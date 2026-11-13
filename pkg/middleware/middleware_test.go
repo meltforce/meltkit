@@ -202,3 +202,14 @@ func TestUserInfoFromContextDefault(t *testing.T) {
 		t.Errorf("DisplayName = %q, want %q", info.DisplayName, "Local Dev User")
 	}
 }
+
+func TestWithUser(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r = r.WithContext(WithUser(r.Context(), 42, UserInfo{Login: "alice", DisplayName: "Alice"}))
+	if uid, ok := UserIDFromContext(r); !ok || uid != 42 {
+		t.Errorf("UserIDFromContext = %d, %v", uid, ok)
+	}
+	if info := UserInfoFromContext(r); info.Login != "alice" || info.DisplayName != "Alice" {
+		t.Errorf("UserInfoFromContext = %+v", info)
+	}
+}
