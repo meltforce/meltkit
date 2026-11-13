@@ -7,9 +7,8 @@ reached as `<app>.meltrocker.net` through the ingress on its host. vimmary
 is the reference implementation: `f8dcfea` login, `154839d` tokens,
 `166f144` login redirect.
 
-Design and reasons: `auth-plan.md`. Deployment rules: homelab
-`configuration/docker-stacks/README.md` (§ *The private ingress*),
-`docs/tsmcp.md`, `SECRETS.md`, `STANDARDS.md`.
+Design and reasons: `auth-plan.md`. Deployment: homelab
+`docs/tsnet-app-to-ingress.md`.
 
 ## 0. Decide per app
 
@@ -128,25 +127,7 @@ config carries an `auth:` block.
 
 ## 7. Deployment (homelab)
 
-The order that keeps every caller working; the vimmary runbook is the worked
-example and moves into homelab once the switch has run.
-
-1. OIDC client on tsidp with redirect
-   `https://<app>.meltrocker.net/auth/oidc/callback` (skill `tsidp-client`),
-   secret in setec `docker/<app>/oidc-client-secret`.
-2. App release with login and tokens deployed while still on tsnet.
-3. Homelab branch: ingress route and DNS record on the host; config with
-   `tailscale.enabled: false`, loopback port, `external_url`, `auth:`
-   (`base_url`, `methods`, `trusted_proxies`, `oidc`, `link_by_email: true`);
-   compose without the tsnet volume, `TS_AUTHKEY` and `NET_RAW`; the OIDC
-   secret in `secret_keys`; every caller's URL (Uptime Kuma, Homepage, tsmcp
-   target and upstream token, juno `mcp-wiring` with `auth: bearer`, CI
-   deploy gate); backup without the tsnet state.
-4. Tailnet policy: 443 on the host's ingress tag for every non-browser
-   caller; egress grants and application grants (Aperture) that named the
-   app's tag now name the host's. Applied by the operator.
-5. Switch: merge, deploy ingress and app, create tokens for machine clients,
-   deploy tsmcp and juno, update webhooks in third-party apps.
-6. Verify: OIDC login lands in the existing account; each caller; each
-   outbound dependency.
-7. Delete the old tsnet device and its tag once nothing references it.
+Order, traps and checks for the switch are in homelab
+`docs/tsnet-app-to-ingress.md`. The app-side prerequisite is § 1–4 released
+and running on tsnet, so that `/mcp`, webhooks and feeds work with login
+configured and tsnet off.
