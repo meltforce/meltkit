@@ -76,6 +76,9 @@ type oidcState struct {
 	Nonce    string `json:"n"`
 	Verifier string `json:"v"`
 	Next     string `json:"r"`
+	// Link marks a flow started by StartOIDCLink. The user to link to is
+	// held server-side under the state's hash, never in this cookie.
+	Link bool `json:"l,omitempty"`
 }
 
 // safeNext accepts only a local absolute path, so the callback cannot
@@ -92,6 +95,37 @@ func safeNext(next string) string {
 }
 
 func (a *Auth) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
+	a.beginOIDC(w, r, r.URL.Query().Get("next"), 0)
+}
+
+// StartOIDCLink starts the OIDC code flow to link the provider identity to
+// userID, a user the app has already authenticated (session or fallback).
+// The callback links (issuer, subject) if no other user holds it, then
+// starts a session for userID and redirects to next. Failures redirect to
+// the login page with error=identity_in_use, invalid_state and the login
+// error codes.
+//
+// Call it from a top-level navigation (link or form POST), not from fetch.
+// A state-changing request must carry an Origin equal to base_url.
+func (a *Auth) StartOIDCLink(w http.ResponseWriter, r *http.Request, userID int64, next string) {
+	if a.oidc == nil {
+		writeError(w, http.StatusNotFound, "oidc not enabled")
+		return
+	}
+	if !isSafeMethod(r.Method) && !a.sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "origin mismatch")
+		return
+	}
+	if userID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid user")
+		return
+	}
+	a.beginOIDC(w, r, next, userID)
+}
+
+// beginOIDC redirects to the provider. A non-zero linkUser records a pending
+// link for the flow's state.
+func (a *Auth) beginOIDC(w http.ResponseWriter, r *http.Request, next string, linkUser int64) {
 	oc, _, err := a.oidc.load(r.Context())
 	if err != nil {
 		a.log.Error("auth: oidc start failed", "error", err)
@@ -102,7 +136,15 @@ func (a *Auth) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		State:    randomToken(),
 		Nonce:    randomToken(),
 		Verifier: oauth2.GenerateVerifier(),
-		Next:     safeNext(r.URL.Query().Get("next")),
+		Next:     safeNext(next),
+		Link:     linkUser != 0,
+	}
+	if st.Link {
+		if err := a.store.CreateOIDCLink(r.Context(), hashToken(st.State), linkUser, a.now().Add(oidcStateTTL)); err != nil {
+			a.log.Error("auth: recording oidc link failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "link failed")
+			return
+		}
 	}
 	raw, _ := json.Marshal(st)
 	a.setCookie(w, a.cookieName(oidcCookieBase), base64.RawURLEncoding.EncodeToString(raw), int(oidcStateTTL/time.Second))
@@ -151,6 +193,21 @@ func (a *Auth) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.loginRedirect(w, r, "invalid_state")
 		return
 	}
+	// Consume the pending link before anything else, so that every outcome
+	// spends it.
+	var linkUser int64
+	if st.Link {
+		uid, err := a.store.ConsumeOIDCLink(r.Context(), hashToken(st.State), a.now())
+		if err != nil {
+			if !errors.Is(err, ErrNotFound) {
+				a.log.Error("auth: reading oidc link failed", "error", err)
+			}
+			a.log.Warn("auth: oidc link callback without a pending link")
+			a.loginRedirect(w, r, "invalid_state")
+			return
+		}
+		linkUser = uid
+	}
 	if e := q.Get("error"); e != "" {
 		a.log.Info("auth: oidc provider returned an error", "error", e)
 		a.loginRedirect(w, r, "oidc_denied")
@@ -162,7 +219,17 @@ func (a *Auth) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		a.loginRedirect(w, r, "oidc_failed")
 		return
 	}
-	uid, err := a.resolveOIDC(r.Context(), id)
+	var uid int64
+	if linkUser != 0 {
+		uid, err = a.linkOIDC(r.Context(), id, linkUser)
+	} else {
+		uid, err = a.resolveOIDC(r.Context(), id)
+	}
+	if errors.Is(err, errIdentityInUse) {
+		a.log.Info("auth: oidc identity already linked to another user", "subject", id.Subject, "user_id", linkUser)
+		a.loginRedirect(w, r, "identity_in_use")
+		return
+	}
 	if errors.Is(err, ErrNoAccount) {
 		a.log.Info("auth: oidc login refused", "issuer", id.Issuer, "subject", id.Subject, "email", id.Email)
 		a.loginRedirect(w, r, "no_account")
@@ -259,7 +326,9 @@ func (a *Auth) resolveOIDC(ctx context.Context, id Identity) (int64, error) {
 	}
 	err = a.store.CreateIdentity(ctx, IdentityLink{Issuer: id.Issuer, Subject: id.Subject, UserID: uid, Email: id.Email})
 	if errors.Is(err, ErrExists) {
-		// A concurrent first login of the same subject linked it first.
+		// A concurrent first login of the same subject linked it first. Its
+		// user wins; a user the resolver created for this login stays in the
+		// app without an identity.
 		link, err := a.store.GetIdentity(ctx, id.Issuer, id.Subject)
 		if err != nil {
 			return 0, err
@@ -270,4 +339,55 @@ func (a *Auth) resolveOIDC(ctx context.Context, id Identity) (int64, error) {
 		return 0, err
 	}
 	return uid, nil
+}
+
+// errIdentityInUse refuses a link to an identity another user holds.
+var errIdentityInUse = errors.New("auth: identity linked to another user")
+
+// linkOIDC links a verified identity to userID unless another user holds it,
+// then asks the resolver with UserID set.
+func (a *Auth) linkOIDC(ctx context.Context, id Identity, userID int64) (int64, error) {
+	link, err := a.store.GetIdentity(ctx, id.Issuer, id.Subject)
+	switch {
+	case err == nil && link.UserID != userID:
+		return 0, errIdentityInUse
+	case err == nil:
+		id.UserID = userID
+		return a.resolve(ctx, id)
+	case !errors.Is(err, ErrNotFound):
+		return 0, err
+	}
+	id.UserID = userID
+	uid, err := a.resolve(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	err = a.store.CreateIdentity(ctx, IdentityLink{Issuer: id.Issuer, Subject: id.Subject, UserID: uid, Email: id.Email})
+	if errors.Is(err, ErrExists) {
+		// Linked concurrently; accept it only if it went to the same user.
+		link, err := a.store.GetIdentity(ctx, id.Issuer, id.Subject)
+		if err != nil {
+			return 0, err
+		}
+		if link.UserID != uid {
+			return 0, errIdentityInUse
+		}
+		return uid, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return uid, nil
+}
+
+// ListIdentities returns the OIDC identities linked to userID.
+func (a *Auth) ListIdentities(ctx context.Context, userID int64) ([]IdentityLink, error) {
+	return a.store.ListIdentities(ctx, userID)
+}
+
+// UnlinkIdentity removes an OIDC identity of userID. It returns ErrNotFound
+// when the identity does not exist or belongs to another user. Whether the
+// user keeps a way to log in is the app's check.
+func (a *Auth) UnlinkIdentity(ctx context.Context, userID int64, issuer, subject string) error {
+	return a.store.DeleteIdentity(ctx, userID, issuer, subject)
 }

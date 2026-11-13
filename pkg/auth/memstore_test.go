@@ -15,6 +15,12 @@ type memStore struct {
 	sessions   map[int64]Session
 	identities map[[2]string]IdentityLink
 	passwords  map[int64]PasswordRecord
+	links      map[string]memLink
+}
+
+type memLink struct {
+	userID  int64
+	expires time.Time
 }
 
 func newMemStore() *memStore {
@@ -22,6 +28,7 @@ func newMemStore() *memStore {
 		sessions:   map[int64]Session{},
 		identities: map[[2]string]IdentityLink{},
 		passwords:  map[int64]PasswordRecord{},
+		links:      map[string]memLink{},
 	}
 }
 
@@ -145,6 +152,47 @@ func (m *memStore) UserHasIdentity(_ context.Context, userID int64) (bool, error
 	return false, nil
 }
 
+func (m *memStore) ListIdentities(_ context.Context, userID int64) ([]IdentityLink, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []IdentityLink
+	for _, l := range m.identities {
+		if l.UserID == userID {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (m *memStore) DeleteIdentity(_ context.Context, userID int64, iss, sub string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := [2]string{iss, sub}
+	if l, ok := m.identities[k]; !ok || l.UserID != userID {
+		return ErrNotFound
+	}
+	delete(m.identities, k)
+	return nil
+}
+
+func (m *memStore) CreateOIDCLink(_ context.Context, h []byte, userID int64, exp time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.links[string(h)] = memLink{userID: userID, expires: exp}
+	return nil
+}
+
+func (m *memStore) ConsumeOIDCLink(_ context.Context, h []byte, now time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.links[string(h)]
+	delete(m.links, string(h))
+	if !ok || !l.expires.After(now) {
+		return 0, ErrNotFound
+	}
+	return l.userID, nil
+}
+
 func (m *memStore) GetPasswordByUsername(_ context.Context, u string) (PasswordRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -229,5 +277,10 @@ func (m *memStore) DeleteUser(_ context.Context, userID int64) error {
 		}
 	}
 	delete(m.passwords, userID)
+	for k, l := range m.links {
+		if l.userID == userID {
+			delete(m.links, k)
+		}
+	}
 	return nil
 }

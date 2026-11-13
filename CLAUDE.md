@@ -63,7 +63,8 @@ pkg/auth/         # sessions, local passwords, OIDC login, auth tables (optional
 - `Handler()` — `/auth/methods`, `/auth/login`, `/auth/oidc/start`, `/auth/oidc/callback`, `/auth/logout`, `/auth/me`; mount at `/auth/*` without stripping the prefix
 - `Middleware(WithFallback(mw))` — session cookie → `middleware.UserIDFromContext`; Origin check on state-changing requests; 401 or fallback without a session
 - `UserResolver` (app) maps an `Identity` to an app user; `LoginLookup` is required for `oidc.link_by_email`
-- `ListSessions`, `RevokeSession`, `RevokeUserSessions`, `CreatePasswordUser`, `SetPassword`, `ChangePassword`, `DeleteUser`, `IsInitialAdmin`
+- `ListSessions`, `RevokeSession`, `RevokeUserSessions`, `CreatePasswordUser`, `SetPassword`, `ChangePassword` (shares the username login limit, `ErrRateLimited`), `DeleteUser`, `IsInitialAdmin`
+- `StartOIDCLink(w, r, userID, next)` — called from an authenticated app route; links the provider identity to that user. The pending link is stored server-side under the state's hash (`auth_oidc_links`, 10 min, single use). `ListIdentities`, `UnlinkIdentity`
 - `NewPgxStore(pool)` implements `Store`; `RunMigrations(dsn)` records versions in `auth_schema_migrations`
 
 ## Patterns

@@ -29,10 +29,11 @@ type Session struct {
 
 // IdentityLink maps an OIDC (issuer, subject) to an app user.
 type IdentityLink struct {
-	Issuer  string
-	Subject string
-	UserID  int64
-	Email   string
+	Issuer    string    `json:"issuer"`
+	Subject   string    `json:"subject"`
+	UserID    int64     `json:"user_id"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // PasswordRecord is a local password account.
@@ -63,6 +64,17 @@ type Store interface {
 	GetIdentity(ctx context.Context, issuer, subject string) (IdentityLink, error)
 	CreateIdentity(ctx context.Context, l IdentityLink) error // ErrExists on (issuer, subject)
 	UserHasIdentity(ctx context.Context, userID int64) (bool, error)
+	ListIdentities(ctx context.Context, userID int64) ([]IdentityLink, error)
+	// DeleteIdentity deletes the link only if it belongs to userID;
+	// otherwise it returns ErrNotFound.
+	DeleteIdentity(ctx context.Context, userID int64, issuer, subject string) error
+
+	// CreateOIDCLink records a pending link of an OIDC identity to userID,
+	// keyed by the SHA-256 of the flow's state. It also deletes expired rows.
+	CreateOIDCLink(ctx context.Context, stateHash []byte, userID int64, expiresAt time.Time) error
+	// ConsumeOIDCLink deletes the pending link and returns its user if it has
+	// not expired at now; otherwise it returns ErrNotFound.
+	ConsumeOIDCLink(ctx context.Context, stateHash []byte, now time.Time) (int64, error)
 
 	GetPasswordByUsername(ctx context.Context, username string) (PasswordRecord, error) // case-insensitive
 	GetPasswordByUserID(ctx context.Context, userID int64) (PasswordRecord, error)
@@ -71,6 +83,7 @@ type Store interface {
 	RecordLoginFailure(ctx context.Context, userID int64, at time.Time) error
 	ResetLoginFailures(ctx context.Context, userID int64) error
 
-	// DeleteUser removes every session, identity and password of userID.
+	// DeleteUser removes every session, identity, pending link and password
+	// of userID.
 	DeleteUser(ctx context.Context, userID int64) error
 }

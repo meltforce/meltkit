@@ -153,8 +153,8 @@ func (p *PgxStore) ListSessions(ctx context.Context, userID int64, now time.Time
 func (p *PgxStore) GetIdentity(ctx context.Context, issuer, subject string) (IdentityLink, error) {
 	l := IdentityLink{Issuer: issuer, Subject: subject}
 	err := p.q.QueryRow(ctx,
-		`SELECT user_id, email FROM auth_identities WHERE issuer = $1 AND subject = $2`, issuer, subject,
-	).Scan(&l.UserID, &l.Email)
+		`SELECT user_id, email, created_at FROM auth_identities WHERE issuer = $1 AND subject = $2`, issuer, subject,
+	).Scan(&l.UserID, &l.Email, &l.CreatedAt)
 	return l, notFound(err)
 }
 
@@ -169,6 +169,51 @@ func (p *PgxStore) UserHasIdentity(ctx context.Context, userID int64) (bool, err
 	var has bool
 	err := p.q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM auth_identities WHERE user_id = $1)`, userID).Scan(&has)
 	return has, err
+}
+
+func (p *PgxStore) ListIdentities(ctx context.Context, userID int64) ([]IdentityLink, error) {
+	rows, err := p.q.Query(ctx,
+		`SELECT issuer, subject, user_id, email, created_at FROM auth_identities WHERE user_id = $1 ORDER BY created_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []IdentityLink
+	for rows.Next() {
+		var l IdentityLink
+		if err := rows.Scan(&l.Issuer, &l.Subject, &l.UserID, &l.Email, &l.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func (p *PgxStore) DeleteIdentity(ctx context.Context, userID int64, issuer, subject string) error {
+	return affected(p.q.Exec(ctx,
+		`DELETE FROM auth_identities WHERE issuer = $1 AND subject = $2 AND user_id = $3`, issuer, subject, userID))
+}
+
+func (p *PgxStore) CreateOIDCLink(ctx context.Context, stateHash []byte, userID int64, expiresAt time.Time) error {
+	_, err := p.q.Exec(ctx, `
+		WITH expired AS (DELETE FROM auth_oidc_links WHERE expires_at <= now())
+		INSERT INTO auth_oidc_links (state_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
+		stateHash, userID, expiresAt)
+	return err
+}
+
+func (p *PgxStore) ConsumeOIDCLink(ctx context.Context, stateHash []byte, now time.Time) (int64, error) {
+	var uid int64
+	var exp time.Time
+	err := p.q.QueryRow(ctx,
+		`DELETE FROM auth_oidc_links WHERE state_hash = $1 RETURNING user_id, expires_at`, stateHash).Scan(&uid, &exp)
+	if err != nil {
+		return 0, notFound(err)
+	}
+	if !exp.After(now) {
+		return 0, ErrNotFound
+	}
+	return uid, nil
 }
 
 const passwordCols = `user_id, username, hash, failed_attempts, last_failed_at`
@@ -219,10 +264,11 @@ func (p *PgxStore) ResetLoginFailures(ctx context.Context, userID int64) error {
 }
 
 func (p *PgxStore) DeleteUser(ctx context.Context, userID int64) error {
-	// One statement, so the three deletes commit together.
+	// One statement, so the deletes commit together.
 	_, err := p.q.Exec(ctx, `
 		WITH s AS (DELETE FROM auth_sessions WHERE user_id = $1),
-		     i AS (DELETE FROM auth_identities WHERE user_id = $1)
+		     i AS (DELETE FROM auth_identities WHERE user_id = $1),
+		     l AS (DELETE FROM auth_oidc_links WHERE user_id = $1)
 		DELETE FROM auth_passwords WHERE user_id = $1`, userID)
 	return err
 }
