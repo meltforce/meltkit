@@ -13,6 +13,7 @@ pkg/server/       # chi router, SPA frontend serving, HTTP lifecycle
 pkg/middleware/    # Tailscale identity, dev identity, request logging, CORS
 pkg/mcp/          # MCP server factory, user ID context injection
 pkg/secrets/      # setec integration (optional), secret resolution chain
+pkg/auth/         # sessions, local passwords, OIDC login, auth tables (optional)
 ```
 
 ## Package Details
@@ -55,6 +56,16 @@ pkg/secrets/      # setec integration (optional), secret resolution chain
 - `ResolveSecret(key)` — priority chain: env var → setec → literal config value
 - Optional — apps without secrets skip this package entirely
 
+### pkg/auth
+- Plan and later stages: `docs/auth-plan.md`
+- `Config` — the app's `auth:` block (`base_url`, `methods`, `session_ttl`, `trusted_proxies`, `initial_admin`, `oidc`)
+- `New(cfg, store, resolver, ...Option)` — no network I/O; the OIDC provider is discovered on first use
+- `Handler()` — `/auth/methods`, `/auth/login`, `/auth/oidc/start`, `/auth/oidc/callback`, `/auth/logout`, `/auth/me`; mount at `/auth/*` without stripping the prefix
+- `Middleware(WithFallback(mw))` — session cookie → `middleware.UserIDFromContext`; Origin check on state-changing requests; 401 or fallback without a session
+- `UserResolver` (app) maps an `Identity` to an app user; `LoginLookup` is required for `oidc.link_by_email`
+- `ListSessions`, `RevokeSession`, `RevokeUserSessions`, `CreatePasswordUser`, `SetPassword`, `ChangePassword`, `DeleteUser`, `IsInitialAdmin`
+- `NewPgxStore(pool)` implements `Store`; `RunMigrations(dsn)` records versions in `auth_schema_migrations`
+
 ## Patterns
 
 - **No app-specific logic**: meltkit provides infrastructure only. Business logic, storage queries, MCP tool handlers, and service layers stay in each app.
@@ -89,6 +100,8 @@ go test -race ./...
 - `pgvector/pgvector-go` — pgvector type support
 - `mark3labs/mcp-go` — MCP server
 - `golang-migrate/migrate/v4` — database migrations
+- `coreos/go-oidc/v3`, `golang.org/x/oauth2` — OIDC client
+- `golang.org/x/crypto/argon2` — password hashing
 - `tailscale.com` — tsnet, local client
 - `tailscale/setec` — secret management
 - `yaml.v3` — config parsing

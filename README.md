@@ -12,6 +12,7 @@ Shared Go infrastructure library for [meltforce](https://github.com/meltforce) s
 | `pkg/middleware` | Tailscale identity, dev identity, request logging, CORS |
 | `pkg/server` | chi router, SPA frontend serving, MCP mounting, health check |
 | `pkg/mcp` | MCP server factory with user ID context injection |
+| `pkg/auth` | Browser login: sessions, local passwords (argon2id), OIDC client, auth tables |
 
 ## Usage
 
@@ -65,5 +66,6 @@ go vet ./...            # static analysis
 - [pgvector/pgvector-go](https://github.com/pgvector/pgvector-go) — pgvector types
 - [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go) — MCP server
 - [golang-migrate/migrate](https://github.com/golang-migrate/migrate) — database migrations
+- [coreos/go-oidc](https://github.com/coreos/go-oidc), [golang.org/x/oauth2](https://pkg.go.dev/golang.org/x/oauth2) — OIDC client
 - [tailscale.com](https://github.com/tailscale/tailscale) — Tailscale identity
 - [tailscale/setec](https://github.com/tailscale/setec) — secret management
