@@ -57,7 +57,10 @@ func NewPgxStore(q Querier) *PgxStore {
 	return &PgxStore{q: q}
 }
 
-var _ Store = (*PgxStore)(nil)
+var (
+	_ Store      = (*PgxStore)(nil)
+	_ TokenStore = (*PgxStore)(nil)
+)
 
 func notFound(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -268,7 +271,74 @@ func (p *PgxStore) DeleteUser(ctx context.Context, userID int64) error {
 	_, err := p.q.Exec(ctx, `
 		WITH s AS (DELETE FROM auth_sessions WHERE user_id = $1),
 		     i AS (DELETE FROM auth_identities WHERE user_id = $1),
-		     l AS (DELETE FROM auth_oidc_links WHERE user_id = $1)
+		     l AS (DELETE FROM auth_oidc_links WHERE user_id = $1),
+		     t AS (DELETE FROM auth_tokens WHERE user_id = $1)
 		DELETE FROM auth_passwords WHERE user_id = $1`, userID)
 	return err
+}
+
+const tokenCols = `id, token_hash, user_id, name, scopes, created_at, expires_at, last_used_at`
+
+func scanToken(row pgx.Row) (Token, error) {
+	var t Token
+	var exp, last *time.Time
+	if err := row.Scan(&t.ID, &t.TokenHash, &t.UserID, &t.Name, &t.Scopes, &t.CreatedAt, &exp, &last); err != nil {
+		return Token{}, err
+	}
+	if exp != nil {
+		t.ExpiresAt = *exp
+	}
+	if last != nil {
+		t.LastUsedAt = *last
+	}
+	return t, nil
+}
+
+// nullTime maps the zero time to NULL.
+func nullTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+func (p *PgxStore) CreateToken(ctx context.Context, t *Token) error {
+	return p.q.QueryRow(ctx, `
+		INSERT INTO auth_tokens (token_hash, user_id, name, scopes, created_at, expires_at, last_used_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id`,
+		t.TokenHash, t.UserID, t.Name, t.Scopes, t.CreatedAt, nullTime(t.ExpiresAt), nullTime(t.LastUsedAt),
+	).Scan(&t.ID)
+}
+
+func (p *PgxStore) GetToken(ctx context.Context, tokenHash []byte, now time.Time) (Token, error) {
+	t, err := scanToken(p.q.QueryRow(ctx,
+		`SELECT `+tokenCols+` FROM auth_tokens WHERE token_hash = $1 AND (expires_at IS NULL OR expires_at > $2)`, tokenHash, now))
+	return t, notFound(err)
+}
+
+func (p *PgxStore) TouchToken(ctx context.Context, id int64, lastUsed time.Time) error {
+	_, err := p.q.Exec(ctx, `UPDATE auth_tokens SET last_used_at = $2 WHERE id = $1`, id, lastUsed)
+	return err
+}
+
+func (p *PgxStore) ListTokens(ctx context.Context, userID int64) ([]Token, error) {
+	rows, err := p.q.Query(ctx, `SELECT `+tokenCols+` FROM auth_tokens WHERE user_id = $1 ORDER BY created_at, id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Token
+	for rows.Next() {
+		t, err := scanToken(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (p *PgxStore) DeleteToken(ctx context.Context, userID, id int64) error {
+	return affected(p.q.Exec(ctx, `DELETE FROM auth_tokens WHERE id = $1 AND user_id = $2`, id, userID))
 }

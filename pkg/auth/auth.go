@@ -1,12 +1,14 @@
 // Package auth authenticates browser users through sessions, local passwords
-// and an OIDC provider. It returns a verified identity; user rows, roles and
-// account policy stay in the app, which answers them through UserResolver.
+// and an OIDC provider, and machine clients through personal access tokens. It
+// returns a verified identity; user rows, roles and account policy stay in the
+// app, which answers them through UserResolver.
 //
 // Wiring:
 //
-//	a, err := auth.New(cfg.Auth, auth.NewPgxStore(db.Pool), resolver)
+//	a, err := auth.New(cfg.Auth, auth.NewPgxStore(db.Pool), resolver, auth.WithTokenPrefix("vimmary"))
 //	router.Handle("/auth/*", a.Handler())
-//	router.With(a.Middleware()).Mount("/api", api)
+//	router.With(a.Middleware(auth.WithScope(auth.ScopeAPI))).Mount("/api", api)
+//	srv.SetMCPWithAuth(mcpSrv, injector, a.Middleware(auth.WithScope(auth.ScopeMCP)))
 //
 // The tables are created by RunMigrations.
 package auth
@@ -66,9 +68,10 @@ type Auth struct {
 	loginPath string
 	now       func() time.Time
 
-	limiter *limiter
-	hashSem chan struct{}
-	oidc    *oidcClient
+	limiter     *limiter
+	hashSem     chan struct{}
+	oidc        *oidcClient
+	tokenPrefix string
 }
 
 // Option configures New.
@@ -133,6 +136,15 @@ func New(cfg Config, store Store, users UserResolver, opts ...Option) (*Auth, er
 	}
 	for _, opt := range opts {
 		opt(a)
+	}
+	if a.tokenPrefix == "" {
+		a.tokenPrefix = cfg.TokenPrefix
+	}
+	if a.tokenPrefix == "" {
+		a.tokenPrefix = DefaultTokenPrefix
+	}
+	if !tokenPrefixRE.MatchString(a.tokenPrefix) {
+		return nil, fmt.Errorf("auth: token prefix %q must be 1 to 32 lower-case letters and digits, starting with a letter", a.tokenPrefix)
 	}
 	return a, nil
 }
@@ -211,7 +223,8 @@ func (a *Auth) RevokeUserSessions(ctx context.Context, userID int64) error {
 	return a.store.DeleteUserSessions(ctx, userID)
 }
 
-// DeleteUser removes every session, identity and password of userID. The app
+// DeleteUser removes every session, identity, password and personal access
+// token of userID. The app
 // calls it when it deletes the user, because the auth tables carry no foreign
 // key into app tables.
 func (a *Auth) DeleteUser(ctx context.Context, userID int64) error {

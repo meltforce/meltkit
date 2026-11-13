@@ -16,6 +16,7 @@ type memStore struct {
 	identities map[[2]string]IdentityLink
 	passwords  map[int64]PasswordRecord
 	links      map[string]memLink
+	tokens     map[int64]Token
 }
 
 type memLink struct {
@@ -29,10 +30,14 @@ func newMemStore() *memStore {
 		identities: map[[2]string]IdentityLink{},
 		passwords:  map[int64]PasswordRecord{},
 		links:      map[string]memLink{},
+		tokens:     map[int64]Token{},
 	}
 }
 
-var _ Store = (*memStore)(nil)
+var (
+	_ Store      = (*memStore)(nil)
+	_ TokenStore = (*memStore)(nil)
+)
 
 func (m *memStore) CreateSession(_ context.Context, s *Session) error {
 	m.mu.Lock()
@@ -282,5 +287,63 @@ func (m *memStore) DeleteUser(_ context.Context, userID int64) error {
 			delete(m.links, k)
 		}
 	}
+	for id, t := range m.tokens {
+		if t.UserID == userID {
+			delete(m.tokens, id)
+		}
+	}
+	return nil
+}
+
+func (m *memStore) CreateToken(_ context.Context, t *Token) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	t.ID = m.nextID
+	m.tokens[t.ID] = *t
+	return nil
+}
+
+func (m *memStore) GetToken(_ context.Context, h []byte, now time.Time) (Token, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.tokens {
+		if bytes.Equal(t.TokenHash, h) && (t.ExpiresAt.IsZero() || t.ExpiresAt.After(now)) {
+			return t, nil
+		}
+	}
+	return Token{}, ErrNotFound
+}
+
+func (m *memStore) TouchToken(_ context.Context, id int64, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.tokens[id]; ok {
+		t.LastUsedAt = at
+		m.tokens[id] = t
+	}
+	return nil
+}
+
+func (m *memStore) ListTokens(_ context.Context, userID int64) ([]Token, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Token
+	for _, t := range m.tokens {
+		if t.UserID == userID {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+func (m *memStore) DeleteToken(_ context.Context, userID, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.tokens[id]
+	if !ok || t.UserID != userID {
+		return ErrNotFound
+	}
+	delete(m.tokens, id)
 	return nil
 }

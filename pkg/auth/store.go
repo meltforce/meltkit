@@ -84,6 +84,6 @@ type Store interface {
 	ResetLoginFailures(ctx context.Context, userID int64) error
 
 	// DeleteUser removes every session, identity, pending link and password
-	// of userID.
+	// of userID, and its tokens if the Store implements TokenStore.
 	DeleteUser(ctx context.Context, userID int64) error
 }

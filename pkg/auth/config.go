@@ -30,8 +30,12 @@ type Config struct {
 	TrustedProxies []string      `yaml:"trusted_proxies"`
 	// InitialAdmin names the first admin: an OIDC email or a local username.
 	// The app reads it through Auth.IsInitialAdmin.
-	InitialAdmin string     `yaml:"initial_admin"`
-	OIDC         OIDCConfig `yaml:"oidc"`
+	InitialAdmin string `yaml:"initial_admin"`
+	// TokenPrefix is the app prefix of personal access tokens
+	// ("<prefix>_pat_<random>"). WithTokenPrefix overrides it; the default is
+	// DefaultTokenPrefix.
+	TokenPrefix string     `yaml:"token_prefix"`
+	OIDC        OIDCConfig `yaml:"oidc"`
 }
 
 // OIDCConfig configures the single OIDC provider.
@@ -72,6 +76,9 @@ func (c Config) Validate() error {
 	}
 	if _, err := parsePrefixes(c.TrustedProxies); err != nil {
 		return err
+	}
+	if c.TokenPrefix != "" && !tokenPrefixRE.MatchString(c.TokenPrefix) {
+		return fmt.Errorf("auth.token_prefix must be 1 to 32 lower-case letters and digits, starting with a letter")
 	}
 	if c.HasMethod(MethodOIDC) {
 		if c.OIDC.Issuer == "" {

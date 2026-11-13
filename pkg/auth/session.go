@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,7 +20,10 @@ const touchInterval = time.Minute
 
 type ctxKey int
 
-const sessionKey ctxKey = iota
+const (
+	sessionKey ctxKey = iota
+	tokenKey
+)
 
 // SessionFromContext returns the session that Middleware authenticated.
 func SessionFromContext(ctx context.Context) (Session, bool) {
@@ -100,35 +104,96 @@ type MiddlewareOption func(*mwOptions)
 
 type mwOptions struct {
 	fallback func(http.Handler) http.Handler
+	scopes   []string
 }
 
-// WithFallback passes a request without a valid session to fallback instead
-// of answering 401. vimmary uses it to keep Tailscale WhoIs as a second path
-// during migration.
+// WithFallback passes a request that carries neither a bearer token nor a
+// valid session to fallback instead of answering 401. vimmary uses it to keep
+// Tailscale WhoIs as a second path during migration.
 func WithFallback(fallback func(http.Handler) http.Handler) MiddlewareOption {
 	return func(o *mwOptions) { o.fallback = fallback }
 }
 
-// Middleware authenticates a request by its session cookie and stores the
-// user in the context, where middleware.UserIDFromContext,
-// middleware.UserInfoFromContext and SessionFromContext read it.
+// WithScope requires scope (ScopeMCP or ScopeAPI) of every request. A personal
+// access token without it answers 403. A session satisfies ScopeAPI only, so
+// under WithScope(ScopeMCP) the session cookie is ignored and the request
+// needs a token. Several WithScope options require all their scopes.
+func WithScope(scope string) MiddlewareOption {
+	return func(o *mwOptions) { o.scopes = append(o.scopes, scope) }
+}
+
+// sessionScopes are the scopes a session cookie satisfies.
+var sessionScopes = []string{ScopeAPI}
+
+func (o *mwOptions) sessionAllowed() bool {
+	for _, s := range o.scopes {
+		if !slices.Contains(sessionScopes, s) {
+			return false
+		}
+	}
+	return true
+}
+
+// TokenFromContext returns the personal access token that Middleware
+// authenticated.
+func TokenFromContext(ctx context.Context) (Token, bool) {
+	t, ok := ctx.Value(tokenKey).(Token)
+	return t, ok
+}
+
+// bearerToken returns the credentials of an "Authorization: Bearer" header.
+func bearerToken(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	scheme, cred, _ := strings.Cut(h, " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		return "", false
+	}
+	return strings.TrimSpace(cred), true
+}
+
+func writeBearerError(w http.ResponseWriter, status int, code, scope, msg string) {
+	v := `Bearer error="` + code + `"`
+	if scope != "" {
+		v += `, scope="` + scope + `"`
+	}
+	w.Header().Set("WWW-Authenticate", v)
+	writeError(w, status, msg)
+}
+
+// Middleware authenticates a request by a personal access token in
+// "Authorization: Bearer" or by its session cookie, and stores the user in the
+// context, where middleware.UserIDFromContext, middleware.UserInfoFromContext,
+// SessionFromContext and TokenFromContext read it.
 //
-// A state-changing request that carries a session cookie must send an Origin
-// equal to base_url; otherwise it answers 403. A request without a valid
-// session answers 401, or goes to the fallback.
+// A bearer request ignores the cookie and needs no Origin. An invalid,
+// expired or revoked token answers 401 with WWW-Authenticate: Bearer and never
+// reaches the fallback; a token without a scope that WithScope requires
+// answers 403. A state-changing request that carries a session cookie must
+// send an Origin equal to base_url; otherwise it answers 403. A request
+// without credentials answers 401, or goes to the fallback.
 func (a *Auth) Middleware(opts ...MiddlewareOption) func(http.Handler) http.Handler {
 	var o mwOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
+	useSession := o.sessionAllowed()
 	return func(next http.Handler) http.Handler {
 		var unauth http.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeError(w, http.StatusUnauthorized, "unauthenticated")
 		})
 		if o.fallback != nil {
 			unauth = o.fallback(next)
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if secret, ok := bearerToken(r); ok {
+				a.serveBearer(w, r, next, secret, o.scopes)
+				return
+			}
+			if !useSession {
+				unauth.ServeHTTP(w, r)
+				return
+			}
 			if _, err := r.Cookie(a.sessionCookieName()); err == nil && !isSafeMethod(r.Method) && !a.sameOrigin(r) {
 				writeError(w, http.StatusForbidden, "origin mismatch")
 				return
@@ -152,6 +217,29 @@ func (a *Auth) Middleware(opts ...MiddlewareOption) func(http.Handler) http.Hand
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func (a *Auth) serveBearer(w http.ResponseWriter, r *http.Request, next http.Handler, secret string, scopes []string) {
+	t, ok, err := a.lookupToken(r.Context(), secret)
+	if err != nil {
+		a.log.Error("auth: token lookup failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "token lookup failed")
+		return
+	}
+	if !ok {
+		writeBearerError(w, http.StatusUnauthorized, "invalid_token", "", "invalid token")
+		return
+	}
+	for _, sc := range scopes {
+		if !t.HasScope(sc) {
+			writeBearerError(w, http.StatusForbidden, "insufficient_scope", strings.Join(scopes, " "), "insufficient scope")
+			return
+		}
+	}
+	a.touchToken(r.Context(), t)
+	ctx := middleware.WithUser(r.Context(), int(t.UserID), middleware.UserInfo{})
+	ctx = context.WithValue(ctx, tokenKey, t)
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // touch updates last_used_at at most once per touchInterval.
