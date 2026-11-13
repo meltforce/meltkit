@@ -60,11 +60,17 @@ func (s *Server) SetTailscale(lc middleware.WhoisClient, us middleware.UserStore
 // SetMCP mounts an MCP server at /mcp with identity middleware.
 // userIDInjector is called to inject the user ID into the MCP context.
 func (s *Server) SetMCP(mcpSrv *mcpserver.MCPServer, userIDInjector func(ctx context.Context, r *http.Request) context.Context) {
+	s.SetMCPWithAuth(mcpSrv, userIDInjector, s.IdentityMiddleware())
+}
+
+// SetMCPWithAuth mounts an MCP server at /mcp behind authMiddleware instead of
+// IdentityMiddleware, for example auth.Middleware(auth.WithScope(auth.ScopeMCP)).
+// userIDInjector is called to inject the user ID into the MCP context.
+func (s *Server) SetMCPWithAuth(mcpSrv *mcpserver.MCPServer, userIDInjector func(ctx context.Context, r *http.Request) context.Context, authMiddleware func(http.Handler) http.Handler) {
 	httpServer := mcpserver.NewStreamableHTTPServer(mcpSrv,
 		mcpserver.WithHTTPContextFunc(userIDInjector),
 	)
-	identity := s.IdentityMiddleware()
-	s.router.Handle("/mcp", identity(httpServer))
+	s.router.Handle("/mcp", authMiddleware(httpServer))
 }
 
 // SetFrontend mounts the embedded SPA filesystem.

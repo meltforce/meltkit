@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/meltforce/meltkit/pkg/middleware"
 )
 
@@ -119,5 +122,41 @@ func TestSetFrontendAPINotFound(t *testing.T) {
 	s.ServeHTTP(rec, httptest.NewRequest("GET", "/api/missing", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestSetMCPWithAuth(t *testing.T) {
+	s := New()
+	called := 0
+	deny := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called++
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+	}
+	s.SetMCPWithAuth(mcpserver.NewMCPServer("test", "0"), func(ctx context.Context, _ *http.Request) context.Context { return ctx }, deny)
+
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest("POST", "/mcp", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusUnauthorized || called != 1 {
+		t.Errorf("status = %d, middleware calls = %d; want 401, 1", rec.Code, called)
+	}
+}
+
+func TestSetMCPUsesIdentityMiddleware(t *testing.T) {
+	s := New()
+	var uid int
+	s.SetMCP(mcpserver.NewMCPServer("test", "0"), func(ctx context.Context, r *http.Request) context.Context {
+		uid, _ = middleware.UserIDFromContext(r)
+		return ctx
+	})
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || uid != 1 {
+		t.Errorf("status = %d, uid = %d; want 200, 1 (DevIdentity)", rec.Code, uid)
 	}
 }
