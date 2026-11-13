@@ -1,0 +1,133 @@
+# How-to: move an app from tsnet identity to `pkg/auth`
+
+For an app that today is its own tsnet node and identifies callers by
+`WhoIs` (vimmary, labtrak, nutrak). The result: the app logs users in itself
+(`pkg/auth`), machine clients send personal access tokens, and the app is
+reached as `<app>.meltrocker.net` through the ingress on its host. vimmary
+is the reference implementation (`f8dcfea` for login; tokens follow).
+
+Design and reasons: `auth-plan.md`. Deployment rules: homelab
+`configuration/docker-stacks/README.md` (§ *The private ingress*),
+`docs/tsmcp.md`, `SECRETS.md`, `STANDARDS.md`.
+
+## 0. Decide per app
+
+| Question | vimmary's answer |
+|---|---|
+| Login methods | `oidc` (tsidp) only |
+| Account policy for unknown OIDC logins | `closed` (admin creates) or `oidc_auto` with a domain allowlist; admin setting at runtime |
+| Who calls the app without a browser | tsmcp, juno (MCP); Karakeep (webhook); feed reader; CI deploy gate; Uptime Kuma |
+| Egress identity for tailnet services | the host's (smokey); grants that named the app's own tag move to the host |
+| Data keyed by tailnet facts | none; nutrak keys households by tailnet (see § 6) |
+
+## 1. Code, inert by default
+
+Every push to `main` deploys, so each step below changes nothing until the
+config carries an `auth:` block.
+
+1. `go get github.com/meltforce/meltkit@<version>` (v0.3.0 login, v0.4.0
+   tokens).
+2. Config: embed `*auth.Config` as `auth:`; nil means off. Resolve
+   `oidc_client_secret` through the existing secrets resolver
+   (`<APP>_OIDC_CLIENT_SECRET`).
+3. Migrations: `auth.RunMigrations(dsn)` right after the app's own; it keeps
+   its own version table. Run it with or without `auth:`.
+4. Build `auth.New(...)` after the service and before the router. No network
+   request at startup: OIDC discovery is lazy.
+
+## 2. Users
+
+1. Migration: `is_admin`, `disabled_at` on the user table; set `is_admin` for
+   whoever the app treats as owner today. labtrak already has `is_admin`.
+2. Implement `auth.UserResolver` and `auth.LoginLookup` in the service layer:
+   - a linked identity (`id.UserID != 0`): refuse disabled users with
+     `auth.ErrNoAccount`, else return the ID;
+   - a first OIDC login: apply the account policy, create the user with
+     `login` = email, make it admin through `IsInitialAdmin` only while no
+     admin exists;
+   - `UserIDByLogin` matches the column that holds the `WhoIs` login today;
+     with `link_by_email: true` this carries existing users over, because
+     tsidp's `email` is the Tailscale login name.
+3. Admin checks read `is_admin`. Without `auth:`, keep the old rule.
+   Disabling a user revokes their sessions and tokens: the bearer path does
+   not ask the resolver.
+4. Logins on `@github`/`@passkey` do not match (tsidp appends its hostname);
+   such a user links through `StartOIDCLink` from an authenticated route.
+5. A CLI subcommand `<app> auth create-user [--admin] <name>` (password from
+   stdin) for instances without OIDC.
+
+## 3. Request authentication
+
+1. The protected group uses
+   `a.Middleware(auth.WithFallback(<WhoIs middleware>))` while tsnet still
+   serves. Install the fallback only when tsnet runs: off the tailnet,
+   meltkit's identity middleware is `DevIdentity` (user 1) and would bypass
+   login. labtrak and nutrak: build their `Principal` from the user ID the
+   middleware sets; act-as stays as it is.
+2. Mount `/auth/*` outside the protected group.
+3. Browser routes that answer a redirect (share-sheet targets) send an
+   unauthenticated request to `/login?next=…`; JSON routes answer 401.
+4. `/mcp` before tokens exist: with `auth:` and tsnet off, do not mount it.
+   With tokens: `SetMCPWithAuth(mcpSrv, injector, a.Middleware(auth.WithScope(auth.ScopeMCP), …))`.
+   A session does not satisfy `mcp`. A request with a bearer header never
+   reaches the `WhoIs` fallback, so a machine client gets its token only
+   when the app accepts it.
+5. Token requests carry an empty `UserInfo`; read login and display name from
+   the user table.
+
+## 4. Frontend
+
+- `/login`: one button per method from `GET /auth/methods`, password form,
+  `?error=` codes as text.
+- API client: 401 → `/login?next=<current path>`.
+- Settings, own account: sessions (revoke), linked identities (link, unlink
+  while another login remains), password, tokens (create once-visible,
+  revoke).
+- Settings, admin: users (create, reset password, disable, admin flag),
+  account policy.
+
+## 5. Tests
+
+- Resolver: linked, disabled, unknown with each policy, admin bootstrap,
+  `link_by_email` hit and miss.
+- Middleware matrix: with/without `auth:` × tsnet on/off; disabled user over
+  `WhoIs` → 403; `auth:` without tsnet → 401.
+- End to end against a throwaway Postgres: password login, 401 redirect,
+  logout, admin pages; and one run without `auth:` against the same database.
+- Migration against a copy of the production schema.
+
+## 6. App-specific points
+
+- **nutrak** keys households by tailnet (`extractTailnet`). `auth.Identity`
+  carries no tailnet. tsidp emits a `tailnet` claim; decide before migrating
+  whether `pkg/auth` passes extra claims through or households get assigned
+  another way.
+- **labtrak** seeds the admin by a hardcoded login (migration `000004`);
+  `link_by_email` keeps it.
+- Both resolve tagged nodes to the primary user over `WhoIs`; after the move
+  those callers need tokens.
+
+## 7. Deployment (homelab)
+
+The order that keeps every caller working; the vimmary runbook is the worked
+example and moves into homelab once the switch has run.
+
+1. OIDC client on tsidp with redirect
+   `https://<app>.meltrocker.net/auth/oidc/callback` (skill `tsidp-client`),
+   secret in setec `docker/<app>/oidc-client-secret`.
+2. App release with login and tokens deployed while still on tsnet.
+3. Homelab branch: ingress route and DNS record on the host; config with
+   `tailscale.enabled: false`, loopback port, `external_url`, `auth:`
+   (`base_url`, `methods`, `trusted_proxies`, `oidc`, `link_by_email: true`);
+   compose without the tsnet volume, `TS_AUTHKEY` and `NET_RAW`; the OIDC
+   secret in `secret_keys`; every caller's URL (Uptime Kuma, Homepage, tsmcp
+   target and upstream token, juno `mcp-wiring` with `auth: bearer`, CI
+   deploy gate); backup without the tsnet state.
+4. Tailnet policy: 443 on the host's ingress tag for every non-browser
+   caller; egress grants and application grants (Aperture) that named the
+   app's tag now name the host's. Applied by the operator.
+5. Switch: merge, deploy ingress and app, create tokens for machine clients,
+   deploy tsmcp and juno, update webhooks in third-party apps.
+6. Verify: OIDC login lands in the existing account; each caller; each
+   outbound dependency.
+7. Delete the old tsnet device and its tag once nothing references it.
