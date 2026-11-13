@@ -93,10 +93,27 @@ func (l *limiter) blocked(user, ip string, now time.Time) (bool, time.Time) {
 	return !until.IsZero(), until
 }
 
-func (l *limiter) fail(user, ip string, now time.Time) {
+// blockedUser reports whether the username alone has reached its limit.
+func (l *limiter) blockedUser(user string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for _, key := range []string{"u:" + user, "ip:" + ip} {
+	e := l.entries["u:"+user]
+	return e != nil && now.Sub(e.start) < l.window && e.count >= l.perUser
+}
+
+func (l *limiter) fail(user, ip string, now time.Time) {
+	l.count([]string{"u:" + user, "ip:" + ip}, now)
+}
+
+// failUser counts a failure against the username only.
+func (l *limiter) failUser(user string, now time.Time) {
+	l.count([]string{"u:" + user}, now)
+}
+
+func (l *limiter) count(keys []string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, key := range keys {
 		e := l.entries[key]
 		if e == nil || now.Sub(e.start) >= l.window {
 			e = &window{start: now}

@@ -45,6 +45,10 @@ var ErrWeakPassword = fmt.Errorf("auth: password must have at least %d character
 // password.
 var ErrInvalidCredentials = errors.New("auth: invalid credentials")
 
+// ErrRateLimited is returned by ChangePassword while the username has reached
+// its limit of failed password checks.
+var ErrRateLimited = errors.New("auth: too many failed password checks")
+
 // dummyHash is verified for unknown usernames so that their response time
 // matches that of a known username.
 var dummyHash = sync.OnceValue(func() string { return hashPasswordUnbounded("meltkit-dummy-password") })
@@ -172,20 +176,32 @@ func (a *Auth) SetPassword(ctx context.Context, userID int64, password string) e
 }
 
 // ChangePassword replaces the password of userID after verifying the current
-// one, as a user changing their own password does.
+// one, as a user changing their own password does. A wrong current password
+// counts against the username's login limit; while the limit is reached it
+// returns ErrRateLimited without checking.
 func (a *Auth) ChangePassword(ctx context.Context, userID int64, current, password string) error {
 	rec, err := a.store.GetPasswordByUserID(ctx, userID)
 	if err != nil {
 		return err
+	}
+	userKey := strings.ToLower(rec.Username)
+	now := a.now()
+	if a.limiter.blockedUser(userKey, now) {
+		return ErrRateLimited
 	}
 	ok, err := a.verifyPassword(ctx, rec.Hash, current)
 	if err != nil {
 		return err
 	}
 	if !ok {
+		a.limiter.failUser(userKey, now)
 		return ErrInvalidCredentials
 	}
-	return a.SetPassword(ctx, userID, password)
+	if err := a.SetPassword(ctx, userID, password); err != nil {
+		return err
+	}
+	a.limiter.reset(userKey)
+	return nil
 }
 
 type loginRequest struct {
