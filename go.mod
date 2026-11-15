@@ -6,7 +6,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/golang-migrate/migrate/v4 v4.20.1
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/mark3labs/mcp-go v0.58.0
 	github.com/pgvector/pgvector-go/pgx v0.4.1
 	github.com/tailscale/setec v0.0.0-20261002143449-bc168fdb2362
